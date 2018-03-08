@@ -1,0 +1,377 @@
+---
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+# Predicting diabetes disease progression using statistical learning techniques 
+#### Julia Barnhart - February 11, 2018
+
+
+### 1. Introduction
+
+Predictive modeling in clinical settings is becoming increasingly popular for patient screening and assessment. It serves as a useful adjunct in clinical practice when implemented alongside expert clinical judgement (Waljee, Higgins, & Singal, 2013). For example, in Efron, Hastie, Johnstone, and Tibshirani (2004), a dataset composed of patient information is used to build various predictive models of diabetes disease progression one year after the baseline assessment. Such models can inform both patients and clinicians about the future course of the illness (Waljee et al., 2003). The "best" model is the one with both high predictive accuracy and relative parsimony. Various subset selection techniques and shrinkage methods can be used in order to build such a model. In this analysis, the diabetes dataset from Waljee et al. (2003) is used to re-approach subset selection, in addition to cross-validation techniques, when fitting Ordinary Least Squares Regression, Ridge Regression, and Lasso models. The final models are compared and evaluated in terms of their predictive accuracy and parsimony. 
+
+### 2. Analysis 
+
+The following libraries are used for the analysis.The diabetes dataset is obtained from the R package lars, or Least Angle Regression, Lasso, and Forward Stagewise.  
+
+```{r message=FALSE, warning=FALSE}
+
+
+library(lars)
+library(leaps)
+library(glmnet)
+library(corrplot)
+library(car)
+
+```
+The dataset contains 442 patient observations with 10 predictor variables and one quantitative response variable. The predictor variables include age, sex, body mass index (BMI), average blood pressure (MAP), and the following six blood serum measurements: total cholesterol (TC), low-density lipoprotein cholesterol (LDL), high-density lipoprotein cholesterol (HDL), total cholesterol (TCH), lamotrigine serum concentration (LTG), and glucose (GLU). The dataset contains no missing values and the predictor variables are standardized so that they are all on the same scale (James, Witten, Hastie, & Tibshirani, 2017, p. 217).
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+data(diabetes)
+data.all <- data.frame(cbind(diabetes$x, y = diabetes$y))
+dim(data.all) # dimensions of dataset
+colnames(data.all) # column names
+sum(is.na(data.all$y)) # any missing values in target variable?
+head(data.all) # look at first six observations
+summary(data.all) # summary statistics
+
+```
+The validation-set approach is used to divide the dataset into a training set and a hold-out (validation) set (James et al., 2017, p. 176). Using the random number generator in R with a seed of 1306, the training dataset generated contains 75% of the observations, while the validation set generated contains 25% of the observations. The training set is used to fit the various predictive models, while the validation set is used later to evaluate the predictive accuracy of these models. 
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+n <- dim(data.all)[1] # sample size = 442
+
+set.seed(1306) # set random number generator seed to enable
+
+test <- sample(n, round(n/4)) # randomly sample 25% test
+data.train <- data.all[-test,]
+data.test <- data.all[test,]
+
+x <- model.matrix(y ~ ., data = data.all)[,-1] # define predictor matrix that excludes intercept column 
+x.train <- x[-test,] # define training predictor matrix
+x.test <- x[test,] # define test predictor matrix
+y <- data.all$y # define response variable
+y.train <- y[-test] # define training response variable
+y.test <- y[test] # define test response variable
+n.train <- dim(data.train)[1] # training sample size = 332
+n.test <- dim(data.test)[1] # test sample size = 110
+
+```
+A scatterplot matrix is generated and the results show approximate linear relationships between the predictor variables and the response variable in the training dataset. Furthermore, they also display correlations between each predictor variable and the response variable  Those highly correlated with the response variable initially indicate potential candidacy into the final model. The correlogram further displays the Pearson correlation between each of the predictor variables. Those predictor variables that are (highly) correlated with another may cause multicollinearity issues (Montgomery, Peck, & Vining, 2012, p. 117).
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+pairs(data.train) # scatterplot matrix of the training dataset 
+
+```
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+corr <- cor(data.train, use= "complete.obs")
+round(corr, 4)
+
+```
+```{r fig1, fig.height=3, fig.width=5, message=FALSE, warning=FALSE, results=TRUE}
+
+corrplot(corr, type = "upper", order = "hclust", # correlogram of training dataset 
+         tl.col = "black", tl.srt = 45)
+
+```
+
+
+
+
+#### 2.1 Least Squares Model
+
+The first model fit to the training dataset is a baseline Ordinary Least Squares multiple linear regression model containing the full set of predictor variables using the R function lm(). According to the results, the predictor variables sex, bmi, map, and ltg are statistically significant using a 0.05 significance level. This may indicate that the other predictor variables are redundant, as they do not provide much information about the response variable beyond the information provided by the other predictor variables. Therefore, this model may not be the most parsimonious one (Pardoe, 2012, p. 109). The residual standard error (RSE) of the model was 54.05 (321 degrees of freedom) with an adjusted R2 value of 0.5064. 
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+lm.full = lm(y~. , data = data.train) # build a full model using training dataset
+round(coef(summary(lm.full)),2)
+summary(lm.full)
+
+coef(lm.full) # extract the estimated regression model coefficients
+
+```
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+confint(lm.full) # obtain a 95% CI for the coefficient estimates
+```
+
+A diagnostic on the model is performed. The plot of the residuals versus fitted values supports the assumption of a linear relationship between the response variable and the predictor variables. It also shows that the error terms have zero mean and are uncorrelated. The Q-Q plot supports the normality assumptions allowing for hypothesis testing and interval estimates (i.e. calculation of t-statistic, F-statistic). The spread-location plot indicates that the error terms are homoscedastic. Lastly, the residual versus leverage plot displays any observation with high leverage (large Cook's Distance) that may overly influence the estimation of the regression coefficients. A Cook's D value of greater than 0.5 may indicate that the observation should be removed from the training dataset (Montgomery et al., 2012, p. 129). Lastly, the variance inflation factors (VIF) were calculated to check for multicollinearity between predictor variables. A VIF of greater than 10 (a general rule-of-thumb threshold) clearly indicates multicollinearity. The following variables showed multicollinearity: tc, ldl, hdl, and ltg. To remedy the issue, these should be taken out of the final model (Pardoe, 2012, p. 207). 
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+par(mfrow=c(2,2))
+plot(lm.full) # plot the model diagnostics to check assumptions
+
+vif(lm.full) # check for VIF
+```
+
+The fitted model containing all 10 predictor variables is used to predict the response in the test dataset. The estimated mean square error (MSE) is calculated (3111.27) along with its standard error (361.09). Additionally, the prediction intervals (PIs) and confidence intervals (CIs) are computed. 
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+predict.regsubsets<- function(object, newdata, id,...){ # predict() function from James et al. (2017, p. 252)
+  form <- as.formula(object$call[[2]])
+  mat <- model.matrix(form, newdata)
+  coefi <- coef(object, id = id)
+  xvars <- names(coefi)
+  mat[, xvars]%*%coefi
+}
+
+pred.lm = predict(lm.full, data.test) # predict response for test set
+
+```
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+predict(lm.full, data.test, interval="prediction") # prediction interval of predicted responses
+predict(lm.full, data.test, interval="confidence") # confidence interval of predicted responses
+
+round(mean((y.test - pred.lm)^2),2) # calculate test MSE
+round(sd((data.test$y - predict(lm.full, data.test))^2)/sqrt(n.test),2) # calculate standard errors 
+
+```
+
+
+#### 2.2 Least Squares Model with Best Subset Selection
+
+The best subset selection algorithm is applied using the R function regsubsets() in the leaps package. The best subset selection algorithm fits OLS regression models for each k-predictor subset and chooses the one with the smallest Residual Sum of Squares, or RSS; it chooses the best model overall based on the lowest Bayesian Information Criterion, or BIC (James et al., 2017, p. 205). 
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+regfit.full=regsubsets(y~.,data.train, nvmax=10) # selecting single best model using BIC
+reg.summary = summary(regfit.full)
+
+```
+
+The subset with six predictor variables has the lowest BIC, or -201.12. The graph below displays BIC versus the number of variables (k) for each model. The red dot displays the optimal number of predictor variables according to the models' BIC.
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+regfit.full=regsubsets(y~.,data.train, nvmax=10) # selecting single best model using BIC
+reg.summary = summary(regfit.full)
+
+```
+
+```{r fig3, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, results=TRUE}
+
+# par(mfrow=c(2,2))
+plot(reg.summary$bic, xlab = "Number of Variables", ylab="BIC")
+idx= which.min(reg.summary$bic) # index of M with minimum BIC 
+# reg.summary$bic[idx] # actual value of BIC
+points(idx, reg.summary$bic[idx], col="red", cex=2,pch=20) 
+
+```
+
+```{r fig4, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, results=TRUE}
+
+
+ # par(mfrow=c(2,2))
+ plot(regfit.full, scale = "bic", main = "Predictor Variables vs. BIC")
+
+```
+
+The model with the selected six predictors is fitted to the training dataset. According to the results, all six predictor variables are statistically significant using a 0.05 significance level. The residual standard error (RSE) of the model was 53.94 (325 degrees of freedom) with an adjusted R2 value of 0.5083. 
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+# round(coef(summary(lm(y~sex+bmi+map+tc+tch+ltg, data=data.train))),2)
+coefi=coef(regfit.full,id=idx)
+
+regfit.best = lm(y~sex+bmi+map+tc+tch+ltg, data=data.train) # fit the best model with the 6 predictor variables
+
+summary(regfit.best) # summary of the linear regression model
+
+```
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+confint(regfit.best) # obtain a 95% CI for the coefficient estimates
+
+```
+
+A diagnostic on the model is then performed. The four resulting plots showed that no gross violations of the OLS assumptions were made and that no single observation has a Cook's D greater than 0.5. Lastly, the VIF is calculated to check for multicollinearity between predictor variables. However, all six predictor variables have a VIF of less than five.
+
+```{r message=FALSE, warning=FALSE, results=TRUE}  
+
+# Plot the model diagnostics to check assumptions
+par(mfrow=c(2,2))
+plot(regfit.best)
+
+# Check for VIF
+vif(regfit.best)
+
+```
+
+The fitted linear regression model containing the six predictor variables is used to predict the response for the test data. The estimated mean square error (MSE) is calculated (3095.48) along with its standard error (369.75). Additionally, the prediction intervals (PIs) and confidence intervals (CIs) are computed.
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+pred=coefi[1]+(x.test[,names(coefi[-1])]%*%coefi[-1]) # predict response for test set
+
+```
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+
+predict(regfit.best, data.test, interval = "prediction") # prediction interval of predicted responses using predict() function
+predict(regfit.best, data.test, interval = "confidence") # confidence interval of predicted responses using predict() function
+```
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+lm.SubSel.test.MSE=round(mean((y.test - pred)^2),2) # calculate test MSE
+lm.SubSel.test.se = sd((data.test$y - predict(regfit.full, data.test, id = idx))^2)/sqrt(n.test) # calculate standard error using predict() function
+
+```
+
+#### 2.3 Least Squares Model with Best Subset Selection using 10-fold Cross-Validation
+
+The next model is built using best subset selection in combination with 10-fold cross-validation. For each k-predictor subset iteration, the 10-fold cross validation algorithm splits up the training set into 10 equal, non-overlapping parts, with nine parts used for model training and one part used for validation. This process itself iterates until each part has been used as a validation set once. Then the Mean Square Error (MSE) is averaged for each k-predictor iteration, producing the CV error. The model with the lowest error (2978.91) is selected (James et al., 2017, p. 181).This algorithm also chooses the previous six-variable model. This model contains the same coefficients as the previous model; therefore, the model diagnostics, predicted responses for the test data, the PIs and CIs, the estimated test MSE (3095.48), and the standard error (369.75) are identical to those of the previous model.  
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+# choose from different-sized mocels using k-fold cross-validation
+# k is the number of folds, j is the validation set for that iteration
+
+k=10
+set.seed(1306)
+folds=sample(1:k, nrow(data.train), replace=TRUE) # no element is found twice 
+cv.errors = matrix(NA, k, 10, dimnames=list(NULL, paste(1:10)))
+for(j in 1:k) {
+  best.fit=regsubsets(y~., data=data.train[folds!=j,], nvmax=10)
+  for (i in 1:10) {
+    pred=predict(best.fit, data.train[folds==j,],id=i)
+    cv.errors[j,i]=mean((data.train$y[folds==j]-pred)^2)
+  }
+}
+
+mean.cv.errors=apply(cv.errors,2,mean)
+idx = which.min(mean.cv.errors) # index of j-variable model with lowest CV error
+
+```
+
+```{r fig5, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, results=TRUE}
+
+# plot the cross-validation error for the j-variable model
+plot(mean.cv.errors, xlab = "j-variable Model", ylab="Cross-validation Error")
+points(idx, mean.cv.errors[idx], col="red", cex=2,pch=20) 
+
+# as in James et al. (2013, p. 250), perform best subset selection on the full 
+# training data set in order to get coefficients for the idx-variable model
+reg.best=regsubsets(y~. , data = data.train , nvmax = 10)
+coefs=coef(reg.best,id=idx)
+
+```
+
+#### 2.4 Ridge Regression Model using 10-fold Cross-Validation
+
+Ridge regression in combination with 10-fold cross-validation utilizing the R function cv.glmnet() is used to build the next model. Ridge regression is a penalizing method that reduces the flexibility of a regression model by adding a shrinkage penalty to the coefficient estimates. However, it is not a variable selection method; therefore, a model using all 10 predictor variables is built (James et al. 2017, p. 219). The ridge regression model is fit to the training set before conducting the cross-validation.  
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+grid=10^seq(10,-2,length=100) # lambda ranging from null model containing only intercept to the least squares fit
+
+set.seed(1306)
+cv.fit=cv.glmnet(x.train, y.train, alpha=0)
+
+```
+
+10-fold cross-validation is used to select the largest value of lambda such that the CV error is within one standard error of the minimum. The plot below shows that the log of this value is approximately 3.73, or log(41.67).
+
+```{r fig6, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, results=TRUE}
+
+plot(cv.fit)
+bestlam=cv.fit$lambda.1se # value of lambda that gives minimum of mean cross-validated error within 1 SE
+log(bestlam)
+
+```
+
+The model is then fit using this value of lambda. The model has shrunk the coefficients towards zero (but none are equal to zero). The estimated MSE is calculated (3070.87) along with its standard error (350.55). 
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+# fit the best model with the bestlam number of predictor variables
+ridge.mod=glmnet(x.train, y.train, alpha=0, lambda=bestlam, thresh=1e-12)
+
+# extract the estimated regression model coefficients
+coef(ridge.mod)
+
+# predict response for test set
+ridge.pred = predict(ridge.mod, s=bestlam, newx=x.test)
+
+# calculate test MSE
+round(mean((y.test - ridge.pred)^2),4)
+# calculate standard error using predict() function
+sd((ridge.pred - y.test)^2)/sqrt(n.test)
+
+```
+
+#### 2.5 Lasso Model using 10-fold Cross-Validation
+
+A model using Lasso and 10-fold cross-validation also utilizing the R function cv.glmnet() is built. As Lasso may shrink coefficients down to zero, it also acts as a variable-selection method and may produce sparse models (James et al., 2017, p. 219). First, the Lasso model is fit to the training dataset. Then 10-fold cross-validation is used to select the largest value of lambda such that the CV error is within one standard error of the minimum. The plot below shows that the log of this value is approximately 1.57, or log(4.79).
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+grid=10^seq(10,-2,length=100) # lambda ranging from null model containing only intercept to the least squares fit
+
+set.seed(1306)
+cv.fit=cv.glmnet(x.train, y.train, alpha=1)
+
+```
+
+```{r fig7, fig.height=4, fig.width=4, message=FALSE, warning=FALSE, results=TRUE}
+
+plot(cv.fit)
+bestlam=cv.fit$lambda.1se # value of lambda that gives minimum of mean cross-validated error within 1 SE
+log(bestlam)
+
+```
+
+The model is then fit using this value of lambda. The Lasso model only includes the predictor variables sex, bmi, map, hdl, ltg, and glu in the model. The other predictor variables are eliminated because their coefficients "shrunk" to zero. The estimated MSE is calculated (2920.04) along with its standard error (346.20).
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+# fit the best model with the bestlam number of predictor variables
+lasso.mod=glmnet(x.train, y.train, alpha=1, lambda=bestlam, thresh=1e-12)
+
+# extract the estimated regression model coefficients
+coef(lasso.mod)
+
+# predict response for test set
+lasso.pred = predict(lasso.mod, s=bestlam, newx=x.test)
+
+# calculate test MSE
+round(mean((y.test - lasso.pred)^2),4)
+# calculate standard error using predict() function
+sd((lasso.pred - y.test)^2)/sqrt(n.test)
+
+```
+
+### 3. Results
+
+The best overall model is chosen based on both predictive accuracy and model parsimony. Predictive accuracy is measured by a model's performance, or test MSE, on the validation set. Additionally, a simpler model is often preferred to one with similar predictive accuracy but (many) more variables. According to the results displayed in the table below, the "best" model is the Lasso one. It has the lowest test MSE, or 2,920.05, and it has the least amount of predictor variables, or six. The standard error for the Lasso model is 346.2. This means, on average, the observed value of the response is 346.2 units away from its predicted value (Pardo, 2013, p. 46).
+
+```{r message=FALSE, warning=FALSE, results=TRUE}
+
+colnames = c('Model Name', 'Test MSE', 'SD','age','sex','bmi','map','tc','ldl','hdl','tch','ltg','glu')
+
+```
+
+### 4. Conclusion 
+The best performing mode for predicting diabetes disease progression one year after the baseline assessment using the validation-set approach is the Lasso model with six predictor variables. This model performed slightly better (lower MSE) than the full OLS regression model and was more parsimonious, containing only six out of the 10 original predictor variables. It is interesting to note that both the Lasso and the OLS subselection models selected sex, bmi, map, and ltg, but differed in two others variables. As the number of predictor variables is small, building a few more hand-picked models and combining it with a nested model test might be valuable in future research (Pardoe, 2013, p. 105). 
+
+### References
+
+James, G., Witten, D., Hastie, T., and Tibshirani, R. (2017). *An introduction to statistical learning with applications in R*. New York, NY: Springer Science+Business Media.
+
+Montgomery, D., Peck, E., and Vining, G. (2012). *Introduction to regression analysis*. Hoboken, NJ. John Wiley & Sons, Inc. 
+
+Pardoe, I. (2013). *Applied regression modeling*. Hoboken, NJ: John Wiley & Sons, Inc.
+
